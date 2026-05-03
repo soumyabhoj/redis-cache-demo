@@ -143,11 +143,6 @@ jobs:
           docker pull ${FULL_IMAGE}
           kind load docker-image ${FULL_IMAGE} --name redis-cache-demo
 
-      - name: Update image in deployment manifest
-        run: |
-          sed -i "s|image: ghcr.io/soumyabhoj/redis-cache-demo:latest|image: ${IMAGE}|g" \
-            k8s/app-deployment.yaml
-
       - name: Apply all Kubernetes manifests
         run: |
           kubectl apply -f k8s/namespace.yaml
@@ -155,6 +150,31 @@ jobs:
           kubectl apply -f k8s/app-configmap.yaml
           kubectl apply -f k8s/redis-deployment.yaml
           kubectl apply -f k8s/app-deployment.yaml
+
+      - name: Patch deployment for kind environment
+        run: |
+          # 1. Use exact SHA image that was loaded into kind
+          kubectl set image deployment/redis-cache-demo \
+            redis-cache-demo=${IMAGE} \
+            -n redis-cache-demo
+
+          # 2. Never pull from registry — image is already loaded locally
+          kubectl patch deployment redis-cache-demo -n redis-cache-demo \
+            --type=json \
+            -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Never"}]'
+
+          # 3. Scale to 1 replica — kind has limited CPU/memory
+          kubectl scale deployment redis-cache-demo \
+            --replicas=1 -n redis-cache-demo
+
+          # 4. Relax readiness probe — app needs time to connect to Redis
+          kubectl patch deployment redis-cache-demo -n redis-cache-demo \
+            --type=json \
+            -p='[
+              {"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds","value":60},
+              {"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/failureThreshold","value":10},
+              {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/initialDelaySeconds","value":90}
+            ]'
 
       - name: Wait for Redis to be ready
         run: |
@@ -171,7 +191,7 @@ jobs:
           kubectl get pods -n redis-cache-demo
           kubectl get services -n redis-cache-demo
 
-      - name: Smoke test — health endpoint via port-forward
+      - name: Smoke test — health and API
         run: |
           kubectl port-forward svc/redis-cache-demo-service 9090:80 \
             -n redis-cache-demo &
@@ -180,28 +200,30 @@ jobs:
 
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             http://localhost:9090/actuator/health)
-          kill $PF_PID
-
           echo "Health check HTTP status: $HTTP_STATUS"
-          [ "$HTTP_STATUS" = "200" ] || exit 1
 
-      - name: Smoke test — products API
-        run: |
-          kubectl port-forward svc/redis-cache-demo-service 9090:80 \
-            -n redis-cache-demo &
-          PF_PID=$!
-          sleep 5
+          PRODUCTS=$(curl -s http://localhost:9090/api/products)
+          echo "Products API response: $PRODUCTS"
 
-          RESPONSE=$(curl -s http://localhost:9090/api/products)
           kill $PF_PID
 
-          echo "API response: $RESPONSE"
-          echo $RESPONSE | grep -q "Laptop" || exit 1
+          [ "$HTTP_STATUS" = "200" ] || exit 1
+          echo $PRODUCTS | grep -q "Laptop" || exit 1
 
-      - name: Rollback on failure
+      - name: Debug info on failure
         if: failure()
         run: |
-          echo "Deployment failed — rolling back..."
-          kubectl rollout undo deployment/redis-cache-demo \
-            -n redis-cache-demo 2>/dev/null || echo "Nothing to roll back"
-          kubectl get pods -n redis-cache-demo
+          echo "===== POD STATUS ====="
+          kubectl get pods -n redis-cache-demo -o wide
+
+          echo "===== APP POD LOGS ====="
+          kubectl logs -l app=redis-cache-demo \
+            -n redis-cache-demo --tail=50 2>/dev/null || true
+
+          echo "===== APP POD DESCRIBE ====="
+          kubectl describe pods -l app=redis-cache-demo \
+            -n redis-cache-demo 2>/dev/null || true
+
+          echo "===== REDIS POD LOGS ====="
+          kubectl logs -l app=redis \
+            -n redis-cache-demo --tail=20 2>/dev/null || true
