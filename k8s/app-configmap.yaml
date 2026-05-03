@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: redis-cache-demo
+data:
+  SPRING_DATA_REDIS_HOST: "redis-service"
+  SPRING_DATA_REDIS_PORT: "6379"
+  SPRING_DATA_REDIS_TIMEOUT: "2000ms"
+  SPRING_CACHE_TYPE: "redis"
+  SPRING_CACHE_REDIS_TIME_TO_LIVE: "60000"
+  SPRING_CACHE_REDIS_CACHE_NULL_VALUES: "false"
+  SPRING_JPA_SHOW_SQL: "false"
+  LOGGING_LEVEL_COM_DEMO_REDIS: "INFO"
+  SERVER_PORT: "8080"
+  JAVA_OPTS: "-Xms128m -Xmx256m"

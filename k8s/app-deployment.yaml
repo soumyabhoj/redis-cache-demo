@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-cache-demo
+  namespace: redis-cache-demo
+  labels:
+    app: redis-cache-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis-cache-demo
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0       # Zero-downtime rolling update
+  template:
+    metadata:
+      labels:
+        app: redis-cache-demo
+    spec:
+      containers:
+        - name: redis-cache-demo
+          # Image is overwritten by GitHub Actions at deploy time
+          image: ghcr.io/YOUR_GITHUB_USERNAME/redis-cache-demo:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: redis-password
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cache-demo-service
+  namespace: redis-cache-demo
+spec:
+  selector:
+    app: redis-cache-demo
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: LoadBalancer   # Use NodePort for minikube: type: NodePort

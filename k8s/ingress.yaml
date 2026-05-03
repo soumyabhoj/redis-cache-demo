@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: redis-cache-demo-ingress
+  namespace: redis-cache-demo
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: redis-demo.yourdomain.com   # Replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: redis-cache-demo-service
+                port:
+                  number: 80
+  # Uncomment to enable TLS
+  # tls:
+  #   - hosts:
+  #       - redis-demo.yourdomain.com
+  #     secretName: redis-demo-tls
