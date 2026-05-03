@@ -14,7 +14,7 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
-      maxUnavailable: 0       # Zero-downtime rolling update
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -22,8 +22,8 @@ spec:
     spec:
       containers:
         - name: redis-cache-demo
-          # Image is overwritten by GitHub Actions at deploy time
           image: ghcr.io/soumyabhoj/redis-cache-demo:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:
@@ -38,7 +38,7 @@ spec:
           resources:
             requests:
               memory: "256Mi"
-              cpu: "250m"
+              cpu: "200m"
             limits:
               memory: "512Mi"
               cpu: "500m"
@@ -46,16 +46,16 @@ spec:
             httpGet:
               path: /actuator/health/liveness
               port: 8080
-            initialDelaySeconds: 60
+            initialDelaySeconds: 90
             periodSeconds: 15
-            failureThreshold: 3
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 60
             periodSeconds: 10
-            failureThreshold: 3
+            failureThreshold: 10
 ---
 apiVersion: v1
 kind: Service
@@ -68,4 +68,4 @@ spec:
   ports:
     - port: 80
       targetPort: 8080
-  type: LoadBalancer   # Use NodePort for minikube: type: NodePort
+  type: LoadBalancer

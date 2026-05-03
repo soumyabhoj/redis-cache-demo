@@ -143,6 +143,13 @@ jobs:
           docker pull ${FULL_IMAGE}
           kind load docker-image ${FULL_IMAGE} --name redis-cache-demo
 
+      - name: Prepare deployment manifest for kind
+        run: |
+          sed -i "s|image: ghcr.io/soumyabhoj/redis-cache-demo:latest|image: ${IMAGE}|g" k8s/app-deployment.yaml
+          sed -i "s|replicas: 2|replicas: 1|g" k8s/app-deployment.yaml
+          echo "--- Patched manifest ---"
+          cat k8s/app-deployment.yaml
+
       - name: Apply all Kubernetes manifests
         run: |
           kubectl apply -f k8s/namespace.yaml
@@ -150,31 +157,6 @@ jobs:
           kubectl apply -f k8s/app-configmap.yaml
           kubectl apply -f k8s/redis-deployment.yaml
           kubectl apply -f k8s/app-deployment.yaml
-
-      - name: Patch deployment for kind environment
-        run: |
-          # 1. Use exact SHA image that was loaded into kind
-          kubectl set image deployment/redis-cache-demo \
-            redis-cache-demo=${IMAGE} \
-            -n redis-cache-demo
-
-          # 2. Never pull from registry — image is already loaded locally
-          kubectl patch deployment redis-cache-demo -n redis-cache-demo \
-            --type=json \
-            -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Never"}]'
-
-          # 3. Scale to 1 replica — kind has limited CPU/memory
-          kubectl scale deployment redis-cache-demo \
-            --replicas=1 -n redis-cache-demo
-
-          # 4. Relax readiness probe — app needs time to connect to Redis
-          kubectl patch deployment redis-cache-demo -n redis-cache-demo \
-            --type=json \
-            -p='[
-              {"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds","value":60},
-              {"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/failureThreshold","value":10},
-              {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/initialDelaySeconds","value":90}
-            ]'
 
       - name: Wait for Redis to be ready
         run: |
