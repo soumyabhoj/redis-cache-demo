@@ -163,6 +163,13 @@ jobs:
           kubectl rollout status deployment/redis \
             -n redis-cache-demo --timeout=120s
 
+      - name: Show pod state before waiting for app
+        run: |
+          echo "===== PODS ====="
+          kubectl get pods -n redis-cache-demo -o wide
+          echo "===== EVENTS ====="
+          kubectl get events -n redis-cache-demo --sort-by='.lastTimestamp' | tail -20
+
       - name: Wait for app to be ready
         run: |
           kubectl rollout status deployment/redis-cache-demo \
@@ -178,19 +185,23 @@ jobs:
           kubectl port-forward svc/redis-cache-demo-service 9090:80 \
             -n redis-cache-demo &
           PF_PID=$!
-          sleep 10
 
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            http://localhost:9090/actuator/health)
-          echo "Health check HTTP status: $HTTP_STATUS"
+          # Wait for app to be reachable (retry up to 90s)
+          echo "Waiting for app to be reachable..."
+          for i in $(seq 1 18); do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              http://localhost:9090/actuator/health 2>/dev/null || echo "000")
+            echo "Attempt $i: HTTP $HTTP_STATUS"
+            [ "$HTTP_STATUS" = "200" ] && break
+            sleep 5
+          done
 
           PRODUCTS=$(curl -s http://localhost:9090/api/products)
           echo "Products API response: $PRODUCTS"
-
           kill $PF_PID
 
-          [ "$HTTP_STATUS" = "200" ] || exit 1
-          echo $PRODUCTS | grep -q "Laptop" || exit 1
+          [ "$HTTP_STATUS" = "200" ] || { echo "Health check failed"; exit 1; }
+          echo "$PRODUCTS" | grep -q "Laptop" || { echo "Products API failed"; exit 1; }
 
       - name: Debug info on failure
         if: failure()
