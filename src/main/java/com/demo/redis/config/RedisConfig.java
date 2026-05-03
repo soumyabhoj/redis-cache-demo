@@ -3,6 +3,7 @@ package com.demo.redis.config;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,7 +16,9 @@ import org.springframework.data.redis.serializer.*;
 import java.time.Duration;
 import java.util.Map;
 
+// Only activated when spring.cache.type=redis — skipped entirely in tests where type=none
 @Configuration
+@ConditionalOnProperty(name = "spring.cache.type", havingValue = "redis")
 public class RedisConfig {
 
     /**
