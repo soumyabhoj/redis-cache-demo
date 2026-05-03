@@ -1,16 +1,15 @@
-# ── Stage 1: Build ──────────────────────────────────────────────────────────
-FROM eclipse-temurin:17-jdk-alpine AS builder
+# ── Stage 1: Build — uses official Maven image which includes JDK 17 ─────────
+FROM maven:3.9-eclipse-temurin-17-alpine AS builder
 WORKDIR /app
 
-# Copy pom first — Docker layer cache skips dependency download
-# if only source code changed
+# Copy pom first — layer cache skips dependency download if only source changed
 COPY pom.xml ./
-RUN mvn dependency:go-offline -q --no-transfer-progress 2>/dev/null || true
+RUN mvn dependency:go-offline -q --no-transfer-progress
 
 COPY src ./src
 RUN mvn clean package -DskipTests -q --no-transfer-progress
 
-# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+# ── Stage 2: Runtime — slim JRE only image ───────────────────────────────────
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
