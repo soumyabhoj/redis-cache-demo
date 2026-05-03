@@ -23,7 +23,7 @@ spec:
       containers:
         - name: redis-cache-demo
           # Image is overwritten by GitHub Actions at deploy time
-          image: ghcr.io/YOUR_GITHUB_USERNAME/redis-cache-demo:latest
+          image: ghcr.io/soumyabhoj/redis-cache-demo:latest
           ports:
             - containerPort: 8080
           envFrom:
