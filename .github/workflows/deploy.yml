@@ -106,94 +106,102 @@ jobs:
 
 
   # ─────────────────────────────────────────────────────────────────────────
-  # JOB 3 — Deploy to Kubernetes
+  # JOB 3 — Deploy to Kubernetes using kind (cluster runs inside the runner)
+  # No external cluster or KUBE_CONFIG secret needed.
   # ─────────────────────────────────────────────────────────────────────────
   deploy:
-    name: Deploy to Kubernetes
+    name: Deploy to Kubernetes (kind)
     runs-on: ubuntu-latest
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    environment:
-      name: production             # Enables GitHub environment protection rules
-      url: http://redis-demo.yourdomain.com
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.9.0
+        with:
+          cluster_name: redis-cache-demo
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
         with:
           version: 'v1.29.0'
 
-      - name: Configure kubeconfig
-        # KUBE_CONFIG secret = base64-encoded kubeconfig file
-        # Generate: cat ~/.kube/config | base64 | pbcopy
-        run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 --decode > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-
-      - name: Derive image tag from commit SHA
-        id: image
+      - name: Pull image from ghcr.io and load into kind
         run: |
           SHA_TAG="sha-$(echo ${{ github.sha }} | cut -c1-7)"
           FULL_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHA_TAG}"
-          echo "tag=${FULL_IMAGE}" >> $GITHUB_OUTPUT
-          echo "Deploying image: ${FULL_IMAGE}"
+          echo "IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
 
-      - name: Apply namespace and base manifests
+          # Authenticate to pull from ghcr.io
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # Pull and load into kind cluster (kind has its own Docker daemon)
+          docker pull ${FULL_IMAGE}
+          kind load docker-image ${FULL_IMAGE} --name redis-cache-demo
+
+      - name: Update image in deployment manifest
+        run: |
+          sed -i "s|image: ghcr.io/soumyabhoj/redis-cache-demo:latest|image: ${IMAGE}|g" \
+            k8s/app-deployment.yaml
+
+      - name: Apply all Kubernetes manifests
         run: |
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/redis-secret.yaml
           kubectl apply -f k8s/app-configmap.yaml
           kubectl apply -f k8s/redis-deployment.yaml
+          kubectl apply -f k8s/app-deployment.yaml
 
       - name: Wait for Redis to be ready
         run: |
           kubectl rollout status deployment/redis \
             -n redis-cache-demo --timeout=120s
 
-      - name: Deploy application with new image
-        run: |
-          # Patch the image tag to the exact SHA built in this pipeline
-          kubectl set image deployment/redis-cache-demo \
-            redis-cache-demo=${{ steps.image.outputs.tag }} \
-            -n redis-cache-demo
-
-          # Apply Service and HPA (idempotent)
-          kubectl apply -f k8s/app-deployment.yaml
-          kubectl apply -f k8s/app-hpa.yaml
-          kubectl apply -f k8s/ingress.yaml
-
-      - name: Wait for rolling update to complete
+      - name: Wait for app to be ready
         run: |
           kubectl rollout status deployment/redis-cache-demo \
             -n redis-cache-demo --timeout=300s
 
-      - name: Verify pods are running
+      - name: Verify all pods are running
         run: |
           kubectl get pods -n redis-cache-demo
           kubectl get services -n redis-cache-demo
 
-      - name: Smoke test — health endpoint
+      - name: Smoke test — health endpoint via port-forward
         run: |
-          # Port-forward in background and test health endpoint
-          kubectl port-forward svc/redis-cache-demo-service 8080:80 \
+          kubectl port-forward svc/redis-cache-demo-service 9090:80 \
+            -n redis-cache-demo &
+          PF_PID=$!
+          sleep 10
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            http://localhost:9090/actuator/health)
+          kill $PF_PID
+
+          echo "Health check HTTP status: $HTTP_STATUS"
+          [ "$HTTP_STATUS" = "200" ] || exit 1
+
+      - name: Smoke test — products API
+        run: |
+          kubectl port-forward svc/redis-cache-demo-service 9090:80 \
             -n redis-cache-demo &
           PF_PID=$!
           sleep 5
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            http://localhost:8080/actuator/health)
+
+          RESPONSE=$(curl -s http://localhost:9090/api/products)
           kill $PF_PID
-          echo "Health check status: $HTTP_STATUS"
-          [ "$HTTP_STATUS" = "200" ] || exit 1
+
+          echo "API response: $RESPONSE"
+          echo $RESPONSE | grep -q "Laptop" || exit 1
 
       - name: Rollback on failure
         if: failure()
         run: |
           echo "Deployment failed — rolling back..."
-          kubectl rollout undo deployment/redis-cache-demo -n redis-cache-demo
-          kubectl rollout status deployment/redis-cache-demo \
-            -n redis-cache-demo --timeout=120s
+          kubectl rollout undo deployment/redis-cache-demo \
+            -n redis-cache-demo 2>/dev/null || echo "Nothing to roll back"
+          kubectl get pods -n redis-cache-demo
