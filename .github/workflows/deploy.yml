@@ -177,31 +177,49 @@ jobs:
 
       - name: Verify all pods are running
         run: |
-          kubectl get pods -n redis-cache-demo
+          kubectl get pods -n redis-cache-demo -o wide
           kubectl get services -n redis-cache-demo
+
+      - name: Show app pod logs before smoke test
+        run: |
+          echo "===== APP POD LOGS ====="
+          kubectl logs -l app=redis-cache-demo -n redis-cache-demo --tail=80 || true
+          echo "===== POD EVENTS ====="
+          kubectl get events -n redis-cache-demo --sort-by='.lastTimestamp' | tail -20
 
       - name: Smoke test — health and API
         run: |
-          kubectl port-forward svc/redis-cache-demo-service 9090:80 \
-            -n redis-cache-demo &
-          PF_PID=$!
+          echo "Waiting for app to be reachable (up to 120s)..."
+          HTTP_STATUS="000"
 
-          # Wait for app to be reachable (retry up to 90s)
-          echo "Waiting for app to be reachable..."
-          for i in $(seq 1 18); do
+          for i in $(seq 1 24); do
+            # Restart port-forward each attempt in case pod restarted
+            pkill -f "port-forward.*9090" 2>/dev/null || true
+            sleep 2
+            kubectl port-forward svc/redis-cache-demo-service 9090:80 \
+              -n redis-cache-demo &>/dev/null &
+            sleep 3
+
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               http://localhost:9090/actuator/health 2>/dev/null || echo "000")
             echo "Attempt $i: HTTP $HTTP_STATUS"
             [ "$HTTP_STATUS" = "200" ] && break
-            sleep 5
+            sleep 0
           done
 
-          PRODUCTS=$(curl -s http://localhost:9090/api/products)
-          echo "Products API response: $PRODUCTS"
-          kill $PF_PID
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "App did not become healthy — final pod state:"
+            kubectl get pods -n redis-cache-demo -o wide
+            kubectl logs -l app=redis-cache-demo -n redis-cache-demo --tail=50 || true
+            exit 1
+          fi
 
-          [ "$HTTP_STATUS" = "200" ] || { echo "Health check failed"; exit 1; }
+          PRODUCTS=$(curl -s http://localhost:9090/api/products)
+          echo "Products: $PRODUCTS"
+          pkill -f "port-forward.*9090" 2>/dev/null || true
+
           echo "$PRODUCTS" | grep -q "Laptop" || { echo "Products API failed"; exit 1; }
+          echo "All smoke tests passed."
 
       - name: Debug info on failure
         if: failure()
